@@ -11,17 +11,18 @@ import "fmt"
 // Паттерн "цепочка вызовов" используется для создания конвеера, каждое звено которого делает
 // свою часть работы, не влияя на состояние других звеньев.
 
-// интерфейсы
+// интерфейс процессора - звена цепочки
 type processor interface {
 	process(request)
 }
 
+// интерфейс цепочки обязанностей (сама является процессором)
 type cor interface {
 	add(processor)
 	processor
 }
 
-// реализация
+// реализация цепочки
 type chain []processor
 
 func (c *chain) add(p ...processor) {
@@ -46,6 +47,8 @@ type request struct {
 	kind kind
 	data string
 }
+
+// реализация процессоров
 
 // printer выводит данные в запроса консоль
 type printer struct{}
