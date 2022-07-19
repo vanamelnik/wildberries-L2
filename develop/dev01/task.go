@@ -16,15 +16,20 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/beevik/ntp"
 )
 
 func main() {
-	currentTime, err := ntp.Time("0.beevik-ntp.pool.ntp.org")
+	currentTime, err := getNTPTime()
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
 	fmt.Println(currentTime)
+}
+
+func getNTPTime() (time.Time, error) {
+	return ntp.Time("0.beevik-ntp.pool.ntp.org")
 }
