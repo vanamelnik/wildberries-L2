@@ -36,26 +36,7 @@ type (
 	OrderStorageType int
 )
 
-// Типы реализаций интерфейса
-const (
-	OrderStorageInmem OrderStorageType = iota
-	OrderStoragePostgres
-	OrderStorageMock
-)
-
 var ErrNotFound = errors.New("order not found")
-
-// CreateOrderStorage - creator, вызывающий фабричные методы создания конкретных продуктов.
-func CreateOrderStorage(t OrderStorageType) (OrderStorage, error) {
-	switch t {
-	case OrderStorageInmem:
-		s := NewInmemOrderStorage()
-		return &s, nil
-	case OrderStorageMock:
-		return &MockOrderStorage{}, nil
-	}
-	return nil, errors.New("not implemented")
-}
 
 var _ OrderStorage = (*InmemOrderStorage)(nil)
 
