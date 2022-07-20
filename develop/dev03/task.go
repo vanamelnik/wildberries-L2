@@ -41,11 +41,12 @@ import (
 
 type (
 	GoSorter struct {
-		reverse bool
-		unique  bool
-		numeric bool
-		k       kFlag
-		lines   sort.Interface
+		reverse      bool
+		unique       bool
+		numeric      bool
+		ignoreSpaces bool
+		k            kFlag
+		lines        sort.StringSlice
 	}
 
 	kFlag []int
@@ -79,9 +80,6 @@ func (s *GoSorter) Sort(lines []string) (string, error) {
 		}
 	}
 
-	if s.reverse {
-		s.lines = sort.Reverse(s.lines)
-	}
 	sort.Sort(s)
 	return strings.Join(lines, "\n"), nil
 }
@@ -102,17 +100,16 @@ func (s *GoSorter) validateColumns() error {
 func (s *GoSorter) Len() int      { return s.lines.Len() }
 func (s *GoSorter) Swap(i, j int) { s.lines.Swap(i, j) }
 func (s *GoSorter) Less(i, j int) bool {
+	if s.reverse {
+		i, j = j, i
+	}
 	if s.k == nil && !s.numeric {
 		return s.lines.Less(i, j)
 	}
-	lines, ok := s.lines.(sort.StringSlice)
-	if !ok {
-		panic("unreachable - sorting interface is not a string slice")
-	}
 	if s.k == nil {
-		return numericLess(lines, i, j)
+		return numericLess(s.lines, i, j)
 	}
-	return s.columnLess(lines, i, j)
+	return s.columnLess(s.lines, i, j)
 }
 
 func (s *GoSorter) columnLess(slice sort.StringSlice, i, j int) bool {
@@ -122,17 +119,15 @@ func (s *GoSorter) columnLess(slice sort.StringSlice, i, j int) bool {
 	if s.numeric {
 		lessFn = numericLess
 	}
-	//nolint: errcheck
-	columns, _ := s.getColumns()
 	var isLess bool
 	for _, k := range s.k {
-		column := columns[k]
-		isLess = lessFn(column, i, j)
-		log.Printf("column: %v\n %s < %s == %v\n", column, column[i], column[j], isLess)
+		valI, _ := s.getColumnVal(i, k)
+		valJ, _ := s.getColumnVal(j, k)
+		isLess = lessFn(sort.StringSlice{valI, valJ}, 0, 1)
 		if isLess {
 			break
 		}
-		if lessFn(column, j, i) {
+		if lessFn(sort.StringSlice{valI, valJ}, 1, 0) {
 			break
 		}
 	}
@@ -165,18 +160,25 @@ func numericLess(slice sort.StringSlice, i, j int) bool {
 	return !iHasNum
 }
 
-func (s *GoSorter) getColumns() ([][]string, error) {
-	lines, ok := s.lines.(sort.StringSlice)
-	if !ok {
-		panic("unreachable - sorting interface is not a string slice")
+func (s *GoSorter) getColumnVal(lineNum, colNum int) (string, error) {
+	if lineNum >= len(s.lines) {
+		return "", fmt.Errorf("line number %d out of range", lineNum)
 	}
-	numColumns := len(strings.Fields(lines[0]))
+	fields := strings.Fields(s.lines[lineNum])
+	if colNum >= len(fields) {
+		return "", fmt.Errorf("column number %d out of range", colNum)
+	}
+	return fields[colNum], nil
+}
+
+func (s *GoSorter) getColumns() ([][]string, error) {
+	numColumns := len(strings.Fields(s.lines[0]))
 	// [<colNum>][<lineNum>]
 	columns := make([][]string, numColumns)
 	for i := range columns {
-		columns[i] = make([]string, len(lines))
+		columns[i] = make([]string, len(s.lines))
 	}
-	for lineNum, line := range lines {
+	for lineNum, line := range s.lines {
 		fields := strings.Fields(line)
 		if len(fields) != numColumns {
 			return nil, fmt.Errorf("wrong number of columns in the line: %q", line)
@@ -207,10 +209,10 @@ func main() {
 	flag.BoolVar(&s.reverse, "r", false, "reverse sorting")
 	flag.BoolVar(&s.unique, "u", false, "show only first of an equal run")
 	flag.BoolVar(&s.numeric, "n", false, "numeric sort")
+	flag.BoolVar(&s.ignoreSpaces, "b", false, "ignore spaces")
 	flag.Var(&s.k, "k", "sort columns")
 	flag.Parse()
 	args := flag.Args()
-	log.Printf("sorter: %+v\nflag args: %v\n", s, args)
 	var lines []string
 	if len(args) > 0 {
 		lines, err = linesFromFiles(args)
@@ -224,7 +226,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Print(sorted)
+	fmt.Println(sorted)
 }
 
 func linesFromFiles(fileNames []string) ([]string, error) {
