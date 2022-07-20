@@ -45,63 +45,101 @@ type (
 		unique  bool
 		numeric bool
 		k       kFlag
+		lines   sort.Interface
 	}
 
-	kFlag [][2]int
+	kFlag []int
 )
 
 func (k *kFlag) String() string {
-	res := make([]string, 0, len(*k))
-	for _, col := range *k {
-		res = append(res, fmt.Sprintf("[%d, %d]", col[0], col[1]))
-	}
-	return "{" + strings.Join(res, " ") + "}"
+	return fmt.Sprintf("%v", *k)
 }
 
 func (k *kFlag) Set(s string) error {
-	fields := strings.Split(s, ",")
-	if len(fields) != 2 {
-		return errors.New("incorrect flag format")
-	}
-	a, err := strconv.Atoi(fields[0])
+	n, err := strconv.Atoi(s)
 	if err != nil {
-		return err
+		return errors.New("flag must be an integer")
 	}
-	b, err := strconv.Atoi(fields[1])
-	if err != nil {
-		return err
+	if n < 1 {
+		return errors.New("value must be greater than or equal to 1")
 	}
-	*k = append(*k, [2]int{a, b})
+	*k = append(*k, n-1) // колонки в массиве нумеруются с 0
 	return nil
 }
 
-func (s *GoSorter) Sort(lines []string) string {
-	var linesToSort sort.Interface
+func (s *GoSorter) Sort(lines []string) (string, error) {
 	if s.unique {
 		lines = onlyUnique(lines)
 	}
-	linesToSort = sort.StringSlice(lines)
-	if s.numeric {
-		linesToSort = NumericStringSlice(lines)
+
+	s.lines = sort.StringSlice(lines)
+	if s.k != nil {
+		if err := s.validateColumns(); err != nil {
+			return "", err
+		}
 	}
+
 	if s.reverse {
-		linesToSort = sort.Reverse(linesToSort)
+		s.lines = sort.Reverse(s.lines)
 	}
-	sort.Sort(linesToSort)
-	return strings.Join(lines, "\n")
+	sort.Sort(s)
+	return strings.Join(lines, "\n"), nil
 }
 
-type NumericStringSlice []string
-
-func (x NumericStringSlice) Len() int {
-	return len(x)
+func (s *GoSorter) validateColumns() error {
+	c, err := s.getColumns()
+	if err != nil {
+		log.Fatalf("could not split file(s) to columns: %s", err)
+	}
+	for _, k := range s.k {
+		if k+1 > len(c) {
+			return fmt.Errorf("wrong value of -k flag: %d, file has %d columns", k+1, len(c))
+		}
+	}
+	return nil
 }
 
-func (x NumericStringSlice) Swap(i, j int) {
-	x[i], x[j] = x[j], x[i]
+func (s *GoSorter) Len() int      { return s.lines.Len() }
+func (s *GoSorter) Swap(i, j int) { s.lines.Swap(i, j) }
+func (s *GoSorter) Less(i, j int) bool {
+	if s.k == nil && !s.numeric {
+		return s.lines.Less(i, j)
+	}
+	lines, ok := s.lines.(sort.StringSlice)
+	if !ok {
+		panic("unreachable - sorting interface is not a string slice")
+	}
+	if s.k == nil {
+		return numericLess(lines, i, j)
+	}
+	return s.columnLess(lines, i, j)
 }
 
-func (x NumericStringSlice) Less(i, j int) bool {
+func (s *GoSorter) columnLess(slice sort.StringSlice, i, j int) bool {
+	lessFn := func(localSlice sort.StringSlice, i, j int) bool {
+		return localSlice.Less(i, j)
+	}
+	if s.numeric {
+		lessFn = numericLess
+	}
+	//nolint: errcheck
+	columns, _ := s.getColumns()
+	var isLess bool
+	for _, k := range s.k {
+		column := columns[k]
+		isLess = lessFn(column, i, j)
+		log.Printf("column: %v\n %s < %s == %v\n", column, column[i], column[j], isLess)
+		if isLess {
+			break
+		}
+		if lessFn(column, j, i) {
+			break
+		}
+	}
+	return isLess
+}
+
+func numericLess(slice sort.StringSlice, i, j int) bool {
 	stripNumber := func(s string) (int, bool) {
 		if !unicode.IsDigit(rune(s[0])) {
 			return -1, false
@@ -116,15 +154,38 @@ func (x NumericStringSlice) Less(i, j int) bool {
 		}
 		return num, true
 	}
-	numI, iHasNum := stripNumber(x[i])
-	numJ, jHasNum := stripNumber(x[j])
+	numI, iHasNum := stripNumber(slice[i])
+	numJ, jHasNum := stripNumber(slice[j])
 	if !iHasNum && !jHasNum {
-		return strings.Compare(x[i], x[j]) == -1
+		return strings.Compare(slice[i], slice[j]) == -1
 	}
 	if iHasNum && jHasNum {
 		return numI < numJ
 	}
 	return !iHasNum
+}
+
+func (s *GoSorter) getColumns() ([][]string, error) {
+	lines, ok := s.lines.(sort.StringSlice)
+	if !ok {
+		panic("unreachable - sorting interface is not a string slice")
+	}
+	numColumns := len(strings.Fields(lines[0]))
+	// [<colNum>][<lineNum>]
+	columns := make([][]string, numColumns)
+	for i := range columns {
+		columns[i] = make([]string, len(lines))
+	}
+	for lineNum, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) != numColumns {
+			return nil, fmt.Errorf("wrong number of columns in the line: %q", line)
+		}
+		for colNum, field := range fields {
+			columns[colNum][lineNum] = field
+		}
+	}
+	return columns, nil
 }
 
 func onlyUnique(arr []string) []string {
@@ -159,7 +220,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sorted := s.Sort(lines)
+	sorted, err := s.Sort(lines)
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Print(sorted)
 }
 
