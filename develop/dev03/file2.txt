@@ -1,0 +1,7 @@
+32 ibm
+apple
+1 microsoft
+ivan-chai
+33banana
+google
+21 sun
