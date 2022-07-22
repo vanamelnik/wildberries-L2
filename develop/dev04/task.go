@@ -19,6 +19,12 @@ package main
 Программа должна проходить все тесты. Код должен проходить проверки go vet и golint.
 */
 
+func getAnagrammes(words []string) map[string][]string {
+	result := make(map[string][]string)
+
+	return result
+}
+
 func main() {
 
 }
