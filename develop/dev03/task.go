@@ -39,23 +39,27 @@ import (
 Программа должна проходить все тесты. Код должен проходить проверки go vet и golint.
 */
 
+// Пакет sort позволяет гибко настраивать сортировку чего бы то ни было путём имплементации интерфейса sort.Interface.
 type (
-	GoSorter struct {
-		reverse      bool
-		unique       bool
-		numeric      bool
-		ignoreSpaces bool
-		k            kFlag
-		lines        sort.StringSlice
+	// goSorter содержит поля, влияющие на сортировку и управляет сортировкой через метод Less.
+	goSorter struct {
+		reverse bool  // обратная сортировка
+		unique  bool  // показывать только уникальные значения
+		numeric bool  // сортировка по числам
+		k       kFlag // сортировка по колонкам
+		lines   sort.StringSlice
 	}
 
+	// kFlag - тип, хранящий все флаги -k
 	kFlag []int
 )
 
+// String реализует интерфейс flag.Value.
 func (k *kFlag) String() string {
 	return fmt.Sprintf("%v", *k)
 }
 
+// Set реализует интерфейс flag.Value.
 func (k *kFlag) Set(s string) error {
 	n, err := strconv.Atoi(s)
 	if err != nil {
@@ -68,7 +72,8 @@ func (k *kFlag) Set(s string) error {
 	return nil
 }
 
-func (s *GoSorter) Sort(lines []string) (string, error) {
+// Sort производит настройку метода Less и сортировка массива строк с помощью sort.Sort.
+func (s *goSorter) Sort(lines []string) (string, error) {
 	if s.unique {
 		lines = onlyUnique(lines)
 	}
@@ -81,42 +86,60 @@ func (s *GoSorter) Sort(lines []string) (string, error) {
 	}
 
 	sort.Sort(s)
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
-func (s *GoSorter) validateColumns() error {
-	c, err := s.getColumns()
-	if err != nil {
-		log.Fatalf("could not split file(s) to columns: %s", err)
+// validateColumns проверяет, может ли файл быть разделённым на равное число колонок,
+// и не превышают ли значения флагов -k числа колонок.
+func (s *goSorter) validateColumns() error {
+	numColumns := len(strings.Fields(s.lines[0]))
+	for i, line := range s.lines {
+		if len(strings.Fields(line)) != numColumns {
+			return fmt.Errorf("could not split file(s) to columns: wrong number of fields in the line #%d", i)
+		}
 	}
 	for _, k := range s.k {
-		if k+1 > len(c) {
-			return fmt.Errorf("wrong value of -k flag: %d, file has %d columns", k+1, len(c))
+		if k+1 > numColumns {
+			return fmt.Errorf("wrong value of -k flag: %d, file has %d columns", k+1, numColumns)
 		}
 	}
 	return nil
 }
 
-func (s *GoSorter) Len() int      { return s.lines.Len() }
-func (s *GoSorter) Swap(i, j int) { s.lines.Swap(i, j) }
-func (s *GoSorter) Less(i, j int) bool {
+// Len наследуется от sort.StringSlice
+func (s *goSorter) Len() int { return s.lines.Len() }
+
+// Swap наследуется от sort.StringSlice
+func (s *goSorter) Swap(i, j int) { s.lines.Swap(i, j) }
+
+// Less реализует интерфейс sort.Interface. В зависимости от установленных флагов меняются параметры сортировки.
+func (s *goSorter) Less(i, j int) bool {
+	// для обратной сортировки меняем местами i и j.
 	if s.reverse {
 		i, j = j, i
 	}
+	// если не нужна сортировка по числовым значениям и по колонкам, наследуем метод sort.StringSLice.
 	if s.k == nil && !s.numeric {
 		return s.lines.Less(i, j)
 	}
+	// для числовой сортировки без разделения на колонки используем метод numericLess
 	if s.k == nil {
 		return numericLess(s.lines, i, j)
 	}
-	return s.columnLess(s.lines, i, j)
+	// иначе columnLess
+	return s.columnLess(i, j)
 }
 
-func (s *GoSorter) columnLess(slice sort.StringSlice, i, j int) bool {
+// columnLess возвращает true, если значение поля в определённой колонке в строке i меньше, чем в строке j.
+// Если значения равны, проверяются следующие колонки из массива k.
+func (s *goSorter) columnLess(i, j int) bool {
+	// lessFn - переопределяемая функция less в зависимости от метода сортировки (обычный или числовой)
 	lessFn := func(localSlice sort.StringSlice, i, j int) bool {
+		// для обычной сортировки наследуем метод sort.StringSlice.
 		return localSlice.Less(i, j)
 	}
 	if s.numeric {
+		// для числовой - используем метод numericLess.
 		lessFn = numericLess
 	}
 	var isLess bool
@@ -127,14 +150,18 @@ func (s *GoSorter) columnLess(slice sort.StringSlice, i, j int) bool {
 		if isLess {
 			break
 		}
+		// проверяем, если valJ < valI, то можем подтвердить "not Less"
 		if lessFn(sort.StringSlice{valI, valJ}, 1, 0) {
 			break
 		}
+		// если valI >= valJ && valJ >= valI ==> valI == valJ; смотрим следующую колонку.
 	}
 	return isLess
 }
 
+// numericLess учитывает числовые значения. Поле, не содержащее числа считается меньшим поля, содержаего число.
 func numericLess(slice sort.StringSlice, i, j int) bool {
+	// stripNumber - внутренняя функция, пытающаяся извлечь число из начала строки
 	stripNumber := func(s string) (int, bool) {
 		if !unicode.IsDigit(rune(s[0])) {
 			return -1, false
@@ -144,23 +171,29 @@ func numericLess(slice sort.StringSlice, i, j int) bool {
 			if !unicode.IsDigit(r) {
 				break
 			}
-			digit := int(r - '0')
+			digit := int(r - '0') //магия рун в действии!
 			num = num*10 + digit
 		}
 		return num, true
 	}
+
 	numI, iHasNum := stripNumber(slice[i])
 	numJ, jHasNum := stripNumber(slice[j])
+
+	// если оба поля не содержат чисел, наследуем метод sort.StringSlice
 	if !iHasNum && !jHasNum {
-		return strings.Compare(slice[i], slice[j]) == -1
+		return slice.Less(i, j)
 	}
+	// если оба поля содержат числа, возвращаем их сравнение.
 	if iHasNum && jHasNum {
 		return numI < numJ
 	}
+	// одно из полей содержит число, другое - нет. Поле, не содержащее число считается меньшим.
 	return !iHasNum
 }
 
-func (s *GoSorter) getColumnVal(lineNum, colNum int) (string, error) {
+// getColumnVal возвращает значение поля с заданными номерами строки и колонки.
+func (s *goSorter) getColumnVal(lineNum, colNum int) (string, error) {
 	if lineNum >= len(s.lines) {
 		return "", fmt.Errorf("line number %d out of range", lineNum)
 	}
@@ -171,31 +204,13 @@ func (s *GoSorter) getColumnVal(lineNum, colNum int) (string, error) {
 	return fields[colNum], nil
 }
 
-func (s *GoSorter) getColumns() ([][]string, error) {
-	numColumns := len(strings.Fields(s.lines[0]))
-	// [<colNum>][<lineNum>]
-	columns := make([][]string, numColumns)
-	for i := range columns {
-		columns[i] = make([]string, len(s.lines))
-	}
-	for lineNum, line := range s.lines {
-		fields := strings.Fields(line)
-		if len(fields) != numColumns {
-			return nil, fmt.Errorf("wrong number of columns in the line: %q", line)
-		}
-		for colNum, field := range fields {
-			columns[colNum][lineNum] = field
-		}
-	}
-	return columns, nil
-}
-
+// onlyUnique убирает из массива повторяющиеся значения.
 func onlyUnique(arr []string) []string {
 	set := make(map[string]bool)
 	result := make([]string, 0, len(arr))
 	for _, s := range arr {
 		if !set[s] {
-			result = append(result, s)
+			result = append(result, s) // добавляем в результат только значения, которых ещё нет в map'е.
 			set[s] = true
 			continue
 		}
@@ -205,18 +220,21 @@ func onlyUnique(arr []string) []string {
 
 func main() {
 	var err error
-	s := GoSorter{}
+	// устанавливаем флаги в структуре GoSorter
+	s := goSorter{}
 	flag.BoolVar(&s.reverse, "r", false, "reverse sorting")
 	flag.BoolVar(&s.unique, "u", false, "show only first of an equal run")
 	flag.BoolVar(&s.numeric, "n", false, "numeric sort")
-	flag.BoolVar(&s.ignoreSpaces, "b", false, "ignore spaces")
 	flag.Var(&s.k, "k", "sort columns")
 	flag.Parse()
+
 	args := flag.Args()
 	var lines []string
 	if len(args) > 0 {
+		// если указаны файлы, читаем их
 		lines, err = linesFromFiles(args)
 	} else {
+		// иначе читаем из stdin
 		lines, err = scanLines(os.Stdin)
 	}
 	if err != nil {
@@ -226,9 +244,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// выводим результат в stdout
 	fmt.Println(sorted)
 }
 
+// linesFromFiles читает файлы, имена которых переданы в массиве, и возвращает их объединенное
+// содержимое в виде массива строк.
 func linesFromFiles(fileNames []string) ([]string, error) {
 	lines := make([]string, 0)
 	for _, name := range fileNames {
@@ -246,6 +267,7 @@ func linesFromFiles(fileNames []string) ([]string, error) {
 	return lines, nil
 }
 
+// scanLines читает построчно переданный reader.
 func scanLines(r io.Reader) ([]string, error) {
 	lines := make([]string, 0)
 	scanner := bufio.NewScanner(r)
