@@ -27,24 +27,9 @@ import (
 Программа должна проходить все тесты. Код должен проходить проверки go vet и golint.
 */
 
+// В качестве примера входного словаря взят список имён существительных русского языка (отсюда: https://github.com/Harrix/Russian-Nouns)
 //go:embed russian_nouns.txt
 var text string
-
-// var v = []string{
-// 	"листок",
-// 	"пятка",
-// 	"слон",
-// 	"тяпка",
-// 	"Козёл",
-// 	"слиток",
-// 	"Тяпка",
-// 	"столик",
-// 	"Стол",
-// 	"лост",
-// 	"Пятак",
-// 	"рот",
-// 	"тор",
-// }
 
 // GetAnagrams составляет словарь анаграмм на основе переданного списка слов.
 // В словарь попадают слова, имеющие хотя бы одну анаграмму в данном списке.
@@ -59,7 +44,7 @@ func GetAnagrams(wordsPtr *[]string) map[string][]string {
 	// преобразуем всё в нижний регистр и оставим только уникальные слова
 	words := onlyUniqueLowerCase(*wordsPtr)
 	// построим карту анаграмм по инвариантным ключам
-	keyMap := setKeyMap(words)
+	keyMap := generateKeyMap(words)
 
 	anagramsMap := make(map[string][]string)
 	for _, anagrams := range keyMap {
@@ -91,7 +76,8 @@ func (s letterKeySlice) Len() int           { return len(s) }
 func (s letterKeySlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s letterKeySlice) Less(i, j int) bool { return s[i][0] < s[j][0] }
 
-// String реализует интерфейс Stringer.
+// String реализует интерфейс Stringer. Возвращает строку с отсортированными в алфавитном порядке
+// парами буква-число букв.
 func (m letterKeyMap) String() string {
 	slice := make(letterKeySlice, 0, len(m))
 	for letter, numLetters := range m {
@@ -119,8 +105,8 @@ func getLetterKey(word string) string {
 	return lMap.String()
 }
 
-// setKeyMap возвращает мапу всех множеств анаграмм по инвариантному ключу.
-func setKeyMap(words []string) map[string][]string {
+// generateKeyMap возвращает мапу всех множеств анаграмм по инвариантному ключу.
+func generateKeyMap(words []string) map[string][]string {
 	keyMap := make(map[string][]string)
 	for _, word := range words {
 		key := getLetterKey(word)
@@ -145,7 +131,7 @@ func onlyUniqueLowerCase(arr []string) []string {
 }
 
 func main() {
-	words := strings.Split(text, "\n")
+	words := strings.Fields(text)
 	for key, anagrams := range GetAnagrams(&words) {
 		fmt.Printf("%s:\n", key)
 		for _, word := range anagrams {

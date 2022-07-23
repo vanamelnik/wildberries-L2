@@ -37,6 +37,8 @@ func TestAnagrams(t *testing.T) {
 	assert.Equal(t, num2, got2)
 }
 
+// generateAnagrams генерирует наборы анаграмм из случайных букв русского алфавита.
+// В каждой группе генерируется определённой количество уникальных анаграмм.
 func generateAnagrams(anagramsInGroup, numOfGroups int) []string {
 	randLetter := func() string {
 		var letters = []rune("йцукенгшщзхъфывапролджэячсмитьбю")
@@ -45,24 +47,27 @@ func generateAnagrams(anagramsInGroup, numOfGroups int) []string {
 	}
 	result := make([]string, 0, anagramsInGroup*numOfGroups)
 	for i := 0; i < numOfGroups; i++ {
-		wordLength := rand.Intn(5) + 4
+		// генерируем слово-родитель случайной длины
+		wordLength := rand.Intn(5) + 4 // длина слова - от 5 до 9 букв
 		word := ""
 		for j := 0; j < wordLength; j++ {
 			word += randLetter()
 		}
 		w := []rune(word)
 		group := make(map[string]struct{})
+		// генерируем уникальные анаграммы слова-родителя
 		for len(group) < anagramsInGroup {
 			shuffle(w)
 			group[string(w)] = struct{}{}
 		}
-		for x := range group {
-			result = append(result, x)
+		for anagram := range group {
+			result = append(result, anagram)
 		}
 	}
 	return result
 }
 
+// shuffle перемешивает данный массив в случайном порядке.
 func shuffle[T comparable](arr []T) {
 	for q := 0; q < rand.Intn(100); q++ {
 		i := rand.Intn(len(arr))
