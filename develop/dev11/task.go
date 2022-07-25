@@ -39,11 +39,10 @@ import (
 	4. Код должен проходить проверки go vet и golint.
 */
 
-const (
-	persistentStorageFile = "event_storage.gob"
-	storageFlushInterval  = time.Second * 5
-)
+// Условием выполнения заданий является разместить весь код в одном файле.
+// На практике целесообразно ползоваться пакетами Go как архитектурными слоями.
 
+// CalendarAPI содержит обработчики htttp-запросов сервиса календаря.
 type CalendarAPI struct {
 	storage EventStorage
 }
@@ -54,6 +53,8 @@ func NewCalendar(s EventStorage) *CalendarAPI {
 	}
 }
 
+// CreateEvent создает новое событие в календаре.
+//
 // POST /create_event
 // параметры (* = обязательный):
 //	- *user_id		ID пользователя (uuid)
@@ -62,12 +63,15 @@ func NewCalendar(s EventStorage) *CalendarAPI {
 //	- place 		место
 //	- description 	описание события
 func (c CalendarAPI) CreateEvent(w http.ResponseWriter, r *http.Request) {
-	logHeader := "createEvent"
+	const logHeader = "createEvent"
+	// проверяем метод
 	if r.Method != http.MethodPost {
 		returnError(w, logHeader, "", http.StatusMethodNotAllowed)
 		return
 	}
 	defer r.Body.Close()
+
+	// извлекаем параметры из запроса
 	queryUserId := r.FormValue("user_id")
 	if queryUserId == "" {
 		returnError(w, logHeader, "missing parameter: user_id", http.StatusBadRequest)
@@ -83,6 +87,7 @@ func (c CalendarAPI) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, "missing parameter: date", http.StatusBadRequest)
 		return
 	}
+	// time, place и description - необязательные параметры
 	queryTime := r.FormValue("time")
 	when, err := parseWhen(queryDate, queryTime)
 	if err != nil {
@@ -98,6 +103,7 @@ func (c CalendarAPI) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		Where:  queryPlace,
 		What:   queryDescription,
 	}
+	// вызываем метод EventStorage для сохранения события
 	if err := c.storage.Add(event); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrEventAlreadyExists) {
@@ -110,6 +116,9 @@ func (c CalendarAPI) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s: created event %+v", logHeader, event)
 }
 
+// UpdateEvent ищет в хранилище событие с указанным event_id (обязательный праметр),
+// и обновляет его поля в соответствии с переданными в запросе.
+//
 // POST /update_event
 // параметры (* = обязательный):
 //	- *event_id		ID события
@@ -119,12 +128,15 @@ func (c CalendarAPI) CreateEvent(w http.ResponseWriter, r *http.Request) {
 //	- place 		место
 //	- description 	описание события
 func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
-	logHeader := "updateEvent"
+	const logHeader = "updateEvent"
+	// проверяем метод
 	if r.Method != http.MethodPost {
 		returnError(w, logHeader, "", http.StatusMethodNotAllowed)
 		return
 	}
 	defer r.Body.Close()
+
+	// извлекаем параметры
 	queryEventId := r.FormValue("event_id")
 	if queryEventId == "" {
 		returnError(w, logHeader, "missing parameter: event_id", http.StatusBadRequest)
@@ -135,8 +147,10 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, fmt.Sprintf("incorrect event ID: %v", err), http.StatusBadRequest)
 		return
 	}
+	// ищем событие с указанным ID
 	event, err := c.storage.Get(eventID)
 	if err != nil {
+		// устанавливаем статус в зависимости от типа ошибки
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrEventNotFound) {
 			status = http.StatusNotFound
@@ -144,6 +158,8 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, err.Error(), status)
 		return
 	}
+
+	// если есть параметр - обновляем его
 
 	queryUserId := r.FormValue("user_id")
 	if queryUserId != "" {
@@ -155,22 +171,26 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 		event.UserID = userID
 	}
 
+	// поскольку дата и время хранятся в одном поле типа time.Time,
+	// пытаемся смержить с имеющимися датой и временем
 	var dateStr, timeStr string
 	queryDate := r.FormValue("date")
-	dateOk := queryDate != ""
-	if !dateOk {
+	queryDateOk := queryDate != ""
+	if !queryDateOk {
 		dateStr = event.When.Format("02.01.2006")
 	} else {
 		dateStr = queryDate
 	}
 	queryTime := r.FormValue("time")
-	timeOk := queryTime != ""
-	if !timeOk {
+	queryTimeOk := queryTime != ""
+	if !queryTimeOk {
 		timeStr = event.When.Format("15:04")
 	} else {
 		timeStr = queryTime
 	}
-	if dateOk || timeOk {
+	// если был передан хотя бы один параметр - обновляем поле, предварительно "срастив"
+	// дату с временем.
+	if queryDateOk || queryTimeOk {
 		when, err := parseWhen(dateStr, timeStr)
 		if err != nil {
 			returnError(w, logHeader, fmt.Sprintf("incorrect date or time: %v", err), http.StatusBadRequest)
@@ -186,6 +206,8 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 	if queryDescription != "" {
 		event.What = queryDescription
 	}
+
+	// вызываем метод EventStorage
 	if err := c.storage.Update(event); err != nil {
 		returnError(w, logHeader, err.Error(), http.StatusInternalServerError)
 		return
@@ -194,16 +216,21 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s: updated event %+v", logHeader, event)
 }
 
+// DeleteEvent удаляет ищет событие с переданным ID и удаляет его.
+//
 // POST /delete_event
 // параметр:
-// event_id
+// *event_id
 func (c CalendarAPI) DeleteEvent(w http.ResponseWriter, r *http.Request) {
-	logHeader := "deleteEvent"
+	const logHeader = "deleteEvent"
+	// проверяем метод (думаю, в это м случае правильнее было бы использовать http метод DELETE)
 	if r.Method != http.MethodPost {
 		returnError(w, logHeader, "", http.StatusMethodNotAllowed)
 		return
 	}
 	defer r.Body.Close()
+
+	// получаем ID события
 	queryEventID := r.FormValue("event_id")
 	if queryEventID == "" {
 		returnError(w, logHeader, "missing parameter: event_id", http.StatusBadRequest)
@@ -214,6 +241,8 @@ func (c CalendarAPI) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, fmt.Sprintf("incorrect event ID: %v", err), http.StatusBadRequest)
 		return
 	}
+
+	// вызываем метод EventStorage
 	if err := c.storage.Delete(eventId); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrEventNotFound) {
@@ -226,12 +255,15 @@ func (c CalendarAPI) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s: deleted event %v", logHeader, eventId)
 }
 
+// GetDayEvents - получить все события указанного дня.
+//
 // GET /events_for_day
 // параметры:
 // *user_id
 // *date
 func (c CalendarAPI) GetDayEvents(w http.ResponseWriter, r *http.Request) {
-	logHeader := "getDayEvents"
+	const logHeader = "getDayEvents"
+	// проверяем метод и получаем параметры
 	userID, day, ok := getEventParams(w, r, logHeader)
 	if !ok {
 		return // ошибки уже обработаны
@@ -244,12 +276,15 @@ func (c CalendarAPI) GetDayEvents(w http.ResponseWriter, r *http.Request) {
 	returnEvents(w, logHeader, events)
 }
 
+// GetWeekEvents - получить все события за неделю, начиная с указанного дня.
 // GET /events_for_week
 // параметры:
 // *user_id
 // *date
 func (c CalendarAPI) GetWeekEvents(w http.ResponseWriter, r *http.Request) {
-	logHeader := "getWeekEvents"
+	const logHeader = "getWeekEvents"
+
+	// проверяем метод и получаем параметры
 	userID, week, ok := getEventParams(w, r, logHeader)
 	if !ok {
 		return // ошибки уже обработаны
@@ -262,12 +297,14 @@ func (c CalendarAPI) GetWeekEvents(w http.ResponseWriter, r *http.Request) {
 	returnEvents(w, logHeader, events)
 }
 
+// GetMonthEvents получить все события за месяц, начиная с указанного дня.
+//
 // GET /events_for_month
 // параметры:
 // *user_id
 // *date
 func (c CalendarAPI) GetMonthEvents(w http.ResponseWriter, r *http.Request) {
-	logHeader := "getMonthEvents"
+	const logHeader = "getMonthEvents"
 	userID, month, ok := getEventParams(w, r, logHeader)
 	if !ok {
 		return // ошибки уже обработаны
@@ -280,6 +317,12 @@ func (c CalendarAPI) GetMonthEvents(w http.ResponseWriter, r *http.Request) {
 	returnEvents(w, logHeader, events)
 }
 
+// getEventParams - проверка метода (должен быть GET) и извлечение из запроса параметров
+// для обработчиков /events_for_day, /events_for_week, /events_for_month
+// Функция обрабатывает и логирует возникшие ошибки.
+// параметры:
+//	- *user_id
+//	- *date
 func getEventParams(w http.ResponseWriter, r *http.Request, logHeader string) (uuid.UUID, time.Time, bool) {
 	if r.Method != http.MethodGet {
 		returnError(w, logHeader, "", http.StatusMethodNotAllowed)
@@ -308,9 +351,13 @@ func getEventParams(w http.ResponseWriter, r *http.Request, logHeader string) (u
 	return userID, t, true
 }
 
+// parseWhen конвертирует дату и время (последнее - при наличии) в переменную типа time.Time.
+// формат даты: "02.01.2006"
+// формат времени "15:04"
 func parseWhen(dateStr, timeStr string) (time.Time, error) {
 	var layout, str string
 	if len(timeStr) > 0 {
+		// если есть время, присовокупляем его
 		layout = "02.01.2006 15:04"
 		str = fmt.Sprintf("%s %s", dateStr, timeStr)
 	} else {
@@ -324,12 +371,16 @@ func parseWhen(dateStr, timeStr string) (time.Time, error) {
 	return result, nil
 }
 
+// returnResult устанавливает требуемый статус-код в заголовке ответа
+// и записывает в тело ответа JSON со строкой результата.
 func returnResult(w http.ResponseWriter, result string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	fmt.Fprintf(w, `{"result": %s}`, result)
 }
 
+// returnError логирует возникшую ошибку и записывает её в тело ответа,
+// установив требуемый статус-код в заголовке.
 func returnError(w http.ResponseWriter, logHeader, err string, status int) {
 	log.Printf("%s: %s", logHeader, err)
 	w.Header().Set("Content-Type", "application/json")
@@ -342,6 +393,8 @@ func returnError(w http.ResponseWriter, logHeader, err string, status int) {
 	fmt.Fprintf(w, `{"error": "%s: %s"}`, http.StatusText(status), err)
 }
 
+// returnEvents устанавливает статус 200 OK и записывает в тело ответа
+// JSON с массивом найденных событий (может быть пустым).
 func returnEvents(w http.ResponseWriter, logHeader string, events []Event) {
 	type result struct {
 		Result []Event `json:"result"`
@@ -354,6 +407,7 @@ func returnEvents(w http.ResponseWriter, logHeader string, events []Event) {
 	}
 }
 
+// LoggerMiddleware логирует информацию о всех http-запросах.
 func LoggerMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer next.ServeHTTP(w, r)
@@ -377,24 +431,47 @@ func LoggerMiddleware(next http.HandlerFunc) http.Handler {
 	})
 }
 
+// Event - событие в календаре.
 type Event struct {
-	ID     uuid.UUID
+	// UUID для идентификаторов выбраны для того, чтобы из сервиса
+	// не "торчали" ключи.
+
+	// ID - уникальный идентификатор события.
+	ID uuid.UUID
+	// UserID - ID пользователя
 	UserID uuid.UUID
-	When   time.Time
-	Where  string
-	What   string
+
+	When  time.Time
+	Where string
+	What  string
 }
 
+// EventStorage - интерфейс хранилища событий в календаре
 type EventStorage interface {
+	// Add добавляет событие в хранилище. Если в хранилище уже имеется
+	// событие с ID равным переданному - возвращается ошибка ErrEventAlreadyExists.
 	Add(Event) error
+	// Update перезаписывает событие с переданным ID, если оно есть в хранилище.
+	// В случае отсутствия возвращается ErrEventNotFound.
 	Update(Event) error
+	// Delete удаляет из хранилища событие с данным ID.
+	// В случае отсутствия возвращается ErrEventNotFound.
 	Delete(uuid.UUID) error
+	// Get возвращает событие с данным ID.
+	// В случае отсутствия возвращается ErrEventNotFound.
 	Get(uuid.UUID) (Event, error)
+	// GetByDay возвращает все события пользователя с данным userID за сутки от
+	// переданного момента. В случае отсутствия событий возвращается пустой массив.
 	GetByDay(userID uuid.UUID, t time.Time) ([]Event, error)
+	// GetForWeek возвращает все события пользователя с данным userID за неделю от
+	// переданного момента. В случае отсутствия событий возвращается пустой массив.
 	GetForWeek(userID uuid.UUID, t time.Time) ([]Event, error)
+	// GetForMonth возвращает все события пользователя с данным userID за месяц от
+	// переданного момента. В случае отсутствия событий возвращается пустой массив.
 	GetForMonth(userID uuid.UUID, t time.Time) ([]Event, error)
 }
 
+// Ошибки EventStorage.
 var (
 	ErrEventAlreadyExists = errors.New("event already exists")
 	ErrEventNotFound      = errors.New("event not found")
@@ -402,14 +479,31 @@ var (
 
 var _ EventStorage = (*InmemEventStorage)(nil)
 
+// InmemEventStorage - имплементация EventStorage.
+// Хранилище расположено в оперативной памяти. Периодически все данные
+// сохраняются в файле (при наличии изменений).
 type InmemEventStorage struct {
-	mu       *sync.RWMutex
-	wg       *sync.WaitGroup
-	repo     map[uuid.UUID]Event
+	mu *sync.RWMutex
+	// repo является хранилищем событий
+	repo map[uuid.UUID]Event
+	// modified устанавливается, когда данные в хранилище обновляются и
+	// их необходимо сохранить на диск.
 	modified bool
-	stopCh   chan struct{}
+	// stopCh - канал, закрытие которого останавливает repoSaver.
+	stopCh chan struct{}
+	wg     *sync.WaitGroup
 }
 
+const (
+	// имя файла, в котором сохраняется repo.
+	persistentStorageFile = "event_storage.gob"
+	// интервал, с периодичностью которого происходят попытки
+	// сохранения данных.
+	storageFlushInterval = time.Second * 5
+)
+
+// NewInmemEventStorage создаёт новое хранилище и запускает воркер, сохраняющий
+// изменения в файл.
 func NewInmemEventStorage() (*InmemEventStorage, error) {
 	s := &InmemEventStorage{
 		mu:     &sync.RWMutex{},
@@ -419,20 +513,17 @@ func NewInmemEventStorage() (*InmemEventStorage, error) {
 	}
 
 	if err := s.readStorageFile(); err != nil {
-		log.Printf("inmemEventStorage: could not open file %s", persistentStorageFile)
-		f, err := os.Create(persistentStorageFile)
-		if err != nil {
-			return nil, err
-		}
-		f.Close()
+		log.Printf("inmemEventStorage: could not open file %s: %s", persistentStorageFile, err)
+	} else {
+		log.Printf("inmemEventStorage: %d entrie(s) successfully read from the file", len(s.repo))
 	}
-	log.Printf("inmemEventStorage: %d entrie(s) successfully read from the file", len(s.repo))
 	s.wg.Add(1)
 	go s.repoSaver()
 
 	return s, nil
 }
 
+// repoSaver - воркер, сохраняющий данные хранилища в файл с заданной периодичностью.
 func (s *InmemEventStorage) repoSaver() {
 	log.Println("inmemEventStorage: persistent repository saver started")
 	flushTick := time.NewTicker(storageFlushInterval)
@@ -441,9 +532,10 @@ func (s *InmemEventStorage) repoSaver() {
 		case <-flushTick.C:
 			s.saveRepo()
 		case <-s.stopCh:
+			// заканчиваем работу
 			s.stopCh = nil
 			flushTick.Stop()
-			s.saveRepo()
+			s.saveRepo() // сохраняем данные
 			log.Println("inmemEventStorage: repoSaver stopped")
 			s.wg.Done()
 			return
@@ -451,6 +543,7 @@ func (s *InmemEventStorage) repoSaver() {
 	}
 }
 
+// saveRepo сохраняет (при наличии изменений) содержимое хранилища в gob-файл.
 func (s *InmemEventStorage) saveRepo() {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -471,6 +564,7 @@ func (s *InmemEventStorage) saveRepo() {
 	log.Println("inmemEventStorage: repoSaver: data successfully saved to the file")
 }
 
+// Close закрывает хранилище и останавливает воркер repoSaver.
 func (s *InmemEventStorage) Close() {
 	if s.stopCh == nil {
 		return
@@ -481,6 +575,7 @@ func (s *InmemEventStorage) Close() {
 	log.Println("inmemEventStorage closed")
 }
 
+// readStorageFile читает содержимое хранилища из gob-файла.
 func (s *InmemEventStorage) readStorageFile() error {
 	f, err := os.Open(persistentStorageFile)
 	if err != nil {
@@ -493,6 +588,7 @@ func (s *InmemEventStorage) readStorageFile() error {
 	return nil
 }
 
+// Add реализует интерфейс EventStorage.
 func (s *InmemEventStorage) Add(e Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -504,6 +600,7 @@ func (s *InmemEventStorage) Add(e Event) error {
 	return nil
 }
 
+// Update реализует интерфейс EventStorage.
 func (s *InmemEventStorage) Update(e Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -515,6 +612,7 @@ func (s *InmemEventStorage) Update(e Event) error {
 	return nil
 }
 
+// Delete реализует интерфейс EventStorage.
 func (s *InmemEventStorage) Delete(eventID uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -526,6 +624,7 @@ func (s *InmemEventStorage) Delete(eventID uuid.UUID) error {
 	return nil
 }
 
+// Get реализует интерфейс EventStorage.
 func (s *InmemEventStorage) Get(eventID uuid.UUID) (Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -536,6 +635,7 @@ func (s *InmemEventStorage) Get(eventID uuid.UUID) (Event, error) {
 	return event, nil
 }
 
+// GetByDay реализует интерфейс EventStorage.
 func (s *InmemEventStorage) GetByDay(userID uuid.UUID, t time.Time) ([]Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -549,6 +649,8 @@ func (s *InmemEventStorage) GetByDay(userID uuid.UUID, t time.Time) ([]Event, er
 	}
 	return result, nil
 }
+
+// GetForWeek реализует интерфейс EventStorage.
 func (s *InmemEventStorage) GetForWeek(userID uuid.UUID, t time.Time) ([]Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -562,6 +664,8 @@ func (s *InmemEventStorage) GetForWeek(userID uuid.UUID, t time.Time) ([]Event, 
 	}
 	return result, nil
 }
+
+// GetForMonth реализует интерфейс EventStorage.
 func (s *InmemEventStorage) GetForMonth(userID uuid.UUID, t time.Time) ([]Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -577,11 +681,14 @@ func (s *InmemEventStorage) GetForMonth(userID uuid.UUID, t time.Time) ([]Event,
 }
 
 func main() {
+	// запускаем storage
 	storage, err := NewInmemEventStorage()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer storage.Close()
+
+	// устанавливаем роутер и прописываем маршруты
 	api := NewCalendar(storage)
 	router := http.NewServeMux()
 	router.Handle("/create_event", LoggerMiddleware(api.CreateEvent))
@@ -590,6 +697,8 @@ func main() {
 	router.Handle("/events_for_day", LoggerMiddleware(api.GetDayEvents))
 	router.Handle("/events_for_week", LoggerMiddleware(api.GetWeekEvents))
 	router.Handle("/events_for_month", LoggerMiddleware(api.GetMonthEvents))
+
+	// устанавливаем http-сервер
 	server := http.Server{
 		Addr:    ":8080",
 		Handler: router,
@@ -600,6 +709,8 @@ func main() {
 		}
 	}()
 	log.Println("Listening at :8080...")
+
+	// подписываемся на сигнал завершения и ждём
 	sigTerm := make(chan os.Signal, 1)
 	signal.Notify(sigTerm, os.Interrupt, os.Kill)
 	<-sigTerm
