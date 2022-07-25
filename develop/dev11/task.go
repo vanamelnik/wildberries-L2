@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -47,6 +48,7 @@ type CalendarAPI struct {
 	storage EventStorage
 }
 
+// NewCalendar создаёт новый объект CalendarAPI.
 func NewCalendar(s EventStorage) *CalendarAPI {
 	return &CalendarAPI{
 		storage: s,
@@ -72,12 +74,12 @@ func (c CalendarAPI) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// извлекаем параметры из запроса
-	queryUserId := r.FormValue("user_id")
-	if queryUserId == "" {
+	queryUserID := r.FormValue("user_id")
+	if queryUserID == "" {
 		returnError(w, logHeader, "missing parameter: user_id", http.StatusBadRequest)
 		return
 	}
-	userID, err := uuid.Parse(queryUserId)
+	userID, err := uuid.Parse(queryUserID)
 	if err != nil {
 		returnError(w, logHeader, fmt.Sprintf("incorrect user ID: %v", err), http.StatusBadRequest)
 		return
@@ -137,12 +139,12 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// извлекаем параметры
-	queryEventId := r.FormValue("event_id")
-	if queryEventId == "" {
+	queryEventID := r.FormValue("event_id")
+	if queryEventID == "" {
 		returnError(w, logHeader, "missing parameter: event_id", http.StatusBadRequest)
 		return
 	}
-	eventID, err := uuid.Parse(queryEventId)
+	eventID, err := uuid.Parse(queryEventID)
 	if err != nil {
 		returnError(w, logHeader, fmt.Sprintf("incorrect event ID: %v", err), http.StatusBadRequest)
 		return
@@ -161,9 +163,9 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 
 	// если есть параметр - обновляем его
 
-	queryUserId := r.FormValue("user_id")
-	if queryUserId != "" {
-		userID, err := uuid.Parse(queryUserId)
+	queryUserID := r.FormValue("user_id")
+	if queryUserID != "" {
+		userID, err := uuid.Parse(queryUserID)
 		if err != nil {
 			returnError(w, logHeader, fmt.Sprintf("incorrect user ID: %v", err), http.StatusBadRequest)
 			return
@@ -236,14 +238,14 @@ func (c CalendarAPI) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, "missing parameter: event_id", http.StatusBadRequest)
 		return
 	}
-	eventId, err := uuid.Parse(queryEventID)
+	eventID, err := uuid.Parse(queryEventID)
 	if err != nil {
 		returnError(w, logHeader, fmt.Sprintf("incorrect event ID: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	// вызываем метод EventStorage
-	if err := c.storage.Delete(eventId); err != nil {
+	if err := c.storage.Delete(eventID); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrEventNotFound) {
 			status = http.StatusNotFound
@@ -251,8 +253,8 @@ func (c CalendarAPI) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, err.Error(), status)
 		return
 	}
-	returnResult(w, fmt.Sprintf("event %v successfully deleted", eventId), http.StatusNoContent)
-	log.Printf("%s: deleted event %v", logHeader, eventId)
+	returnResult(w, fmt.Sprintf("event %v successfully deleted", eventID), http.StatusNoContent)
+	log.Printf("%s: deleted event %v", logHeader, eventID)
 }
 
 // GetDayEvents - получить все события указанного дня.
@@ -681,6 +683,8 @@ func (s *InmemEventStorage) GetForMonth(userID uuid.UUID, t time.Time) ([]Event,
 }
 
 func main() {
+	port := flag.String("p", "8080", "port")
+	flag.Parse()
 	// запускаем storage
 	storage, err := NewInmemEventStorage()
 	if err != nil {
@@ -700,7 +704,7 @@ func main() {
 
 	// устанавливаем http-сервер
 	server := http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + *port,
 		Handler: router,
 	}
 	go func() {
@@ -708,7 +712,7 @@ func main() {
 			log.Println(err)
 		}
 	}()
-	log.Println("Listening at :8080...")
+	log.Printf("Listening at %s...", server.Addr)
 
 	// подписываемся на сигнал завершения и ждём
 	sigTerm := make(chan os.Signal, 1)
