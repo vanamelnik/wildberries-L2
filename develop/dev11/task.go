@@ -212,7 +212,7 @@ func (c CalendarAPI) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 		returnError(w, logHeader, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	returnResult(w, "event successfully updated", http.StatusCreated)
+	returnResult(w, "event successfully updated", http.StatusOK)
 	log.Printf("%s: updated event %+v", logHeader, event)
 }
 
