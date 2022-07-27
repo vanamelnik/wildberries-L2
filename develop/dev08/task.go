@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,14 +39,23 @@ func ErrIncorrectCommand(cmd string) error {
 	return fmt.Errorf("Bad command or file name: %s", cmd)
 }
 
-// функция команды
-type cmdFunc func(string) error
+type (
+	// контекст выполнения команды
+	cmdContext struct {
+		stdin  io.Reader
+		stdOut io.Writer
+		args   string
+	}
+
+	// функция команды
+	cmdFunc func(cmdContext) error
+)
 
 // диспетчер команд
 var cmdMap = map[string]cmdFunc{
 	"exit": exit,
 	"pwd":  pwd,
-	"cd":   os.Chdir,
+	"cd":   cd,
 	"echo": echo,
 	"ps":   ps,
 	"kill": kill,
@@ -59,13 +71,44 @@ type cmdLine struct {
 	nextCmd *cmdLine
 }
 
-// Exec запускает команду.
-func (cl cmdLine) Exec(stdin *os.File) error {
-	command, ok := cmdMap[cl.cmd]
-	if !ok {
-		return ErrIncorrectCommand(cl.cmd)
+// Execute запускает команду.
+func (cl cmdLine) Execute(stdIn io.Reader, stdOut io.Writer) error {
+	buf := bytes.Buffer{}
+	ctx := cmdContext{
+		stdin:  stdIn,
+		stdOut: stdOut,
+		args:   cl.args,
 	}
-	return command(cl.args)
+	// если в пайпе есть команда дальше - буферизируем стандартный вывод
+	if cl.nextCmd != nil {
+		ctx.stdOut = &buf
+	}
+	runCommand, ok := cmdMap[cl.cmd]
+	if ok {
+		err := runCommand(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Если команда отсутствует в стандартном наборе,
+		// пытаемся запустить ее в настоящем shell.
+		cmd := exec.Command(cl.cmd, strings.Split(cl.args, " ")...)
+		if cl.args == "" {
+			cmd.Args = nil
+		}
+		cmd.Stdin = ctx.stdin
+		cmd.Stdout = ctx.stdOut
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+	}
+	// если в пайпе есть команда, запускаем её
+	// стандартный ввод берём из буфера
+	if cl.nextCmd != nil {
+		return cl.nextCmd.Execute(&buf, stdOut)
+	}
+	return nil
 }
 
 // parseCmdLine переводит строку, введенную пользователем в структуру команды
@@ -74,6 +117,7 @@ func parseCmdLine(c string) *cmdLine {
 	pipe := strings.Split(c, "|")
 	var nextCmd *cmdLine = nil
 	if len(pipe) > 1 {
+		c = pipe[0]
 		nextCmd = parseCmdLine(strings.Join(pipe[1:], "|"))
 	}
 	fields := strings.Fields(c)
@@ -94,46 +138,50 @@ func printPrompt() {
 }
 
 // выводит строку на экран
-func echo(s string) error {
-	fmt.Println(s)
+func echo(c cmdContext) error {
+	fmt.Fprintln(c.stdOut, c.args)
 	return nil
 }
 
 // ps выводит список процессов
-func ps(s string) error {
+func ps(c cmdContext) error {
 	processes, err := gops.Processes()
 	if err != nil {
 		return err
 	}
-	fmt.Println("PID\t\tname")
-	fmt.Println("------------------------")
+	fmt.Fprintln(c.stdOut, "PID\t\tname")
+	fmt.Fprintln(c.stdOut, "------------------------")
 	for _, p := range processes {
-		fmt.Printf("%d\t\t%s\n", p.Pid(), p.Executable())
+		fmt.Fprintf(c.stdOut, "%d\t\t%s\n", p.Pid(), p.Executable())
 	}
 	return nil
 }
 
 // pwd выводит текущий путь
-func pwd(s string) error {
+func pwd(c cmdContext) error {
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	fmt.Println(dir)
+	fmt.Fprintln(c.stdOut, dir)
 	return nil
 }
 
 // kill убивает процесс с данным pid.
-func kill(pidStr string) error {
-	pid, err := strconv.Atoi(pidStr)
+func kill(c cmdContext) error {
+	pid, err := strconv.Atoi(c.args)
 	if err != nil {
 		return err
 	}
 	return syscall.Kill(pid, syscall.SIGINT)
 }
 
+func cd(c cmdContext) error {
+	return os.Chdir(c.args)
+}
+
 // exit завершает работу оболочки.
-func exit(string) error {
+func exit(cmdContext) error {
 	return ErrExit
 }
 
@@ -143,7 +191,7 @@ func parser(c string) error {
 		return nil
 	}
 	cl := parseCmdLine(c)
-	return cl.Exec(os.Stdin)
+	return cl.Execute(os.Stdin, os.Stdout)
 }
 
 func main() {
